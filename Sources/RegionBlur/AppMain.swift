@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import RegionBlurCore
+import ApplicationServices
 
 @MainActor final class OverlayPanel: NSPanel {
     let regionID: UUID
@@ -81,6 +82,10 @@ import RegionBlurCore
     private var selectedRegionID: UUID?
     private var clarityWindow: NSWindow?
     private var claritySlider: NSSlider?
+    private var trackingTimer: Timer?
+    private var trackedRegionID: UUID?
+    private var trackedWindow: AXUIElement?
+    private var trackedOffset = CGSize.zero
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -113,6 +118,8 @@ import RegionBlurCore
         menu.addItem(selectItem)
         menu.addItem(withTitle: "删除当前/最近区域", action: #selector(deleteSelected), keyEquivalent: "")
         menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
+        menu.addItem(withTitle: "跟随当前窗口", action: #selector(attachToFrontWindow), keyEquivalent: "")
+        menu.addItem(withTitle: "停止跟随", action: #selector(stopTracking), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -161,6 +168,44 @@ import RegionBlurCore
     @objc private func selectRegion(_ item: NSMenuItem) {
         guard let idString = item.representedObject as? String, let id = UUID(uuidString: idString) else { return }
         selectedRegionID = id
+    }
+    @objc private func attachToFrontWindow() {
+        guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        guard AXIsProcessTrustedWithOptions(options) else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement], let window = windows.first,
+              let bounds = windowFrame(window) else { return }
+        guard let region = manager.regions.first(where: { $0.id == id }) else { return }
+        trackedRegionID = id; trackedWindow = window
+        trackedOffset = CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY)
+        trackingTimer?.invalidate()
+        trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindow() }
+        updateTrackedWindow()
+    }
+    @objc private func stopTracking() {
+        trackedRegionID = nil; trackedWindow = nil; trackingTimer?.invalidate(); trackingTimer = nil
+        guard let id = selectedRegionID ?? manager.regions.last?.id, var region = manager.regions.first(where: { $0.id == id }) else { return }
+        region.mode = .fixed; region.attachment = nil; manager.update(region)
+    }
+    private func updateTrackedWindow() {
+        guard let id = trackedRegionID, let window = trackedWindow, let bounds = windowFrame(window), var region = manager.regions.first(where: { $0.id == id }) else { return }
+        region.mode = .attached
+        region.frame.origin = CGPoint(x: bounds.minX + trackedOffset.width, y: bounds.minY + trackedOffset.height)
+        manager.update(region)
+    }
+    private func windowFrame(_ window: AXUIElement) -> CGRect? {
+        var positionRef: CFTypeRef?; var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let positionRef, let sizeRef else { return nil }
+        var point = CGPoint.zero; var size = CGSize.zero
+        guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &point), AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) else { return nil }
+        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        return CGRect(x: point.x, y: screenHeight - point.y - size.height, width: size.width, height: size.height)
     }
     @objc private func openClaritySlider() {
         guard let id = selectedRegionID ?? manager.regions.last?.id,
