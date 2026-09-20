@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "RegionBlurCore"),
+        .executableTarget(name: "RegionBlur", dependencies: ["RegionBlurCore"]),
         .executableTarget(name: "RegionBlurTests", dependencies: ["RegionBlurCore"], path: "Tests/RegionBlurTests")
     ]
 )
