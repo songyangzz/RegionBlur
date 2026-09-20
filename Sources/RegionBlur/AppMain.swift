@@ -18,6 +18,7 @@ import RegionBlurCore
         visual.autoresizingMask = [.width, .height]
         visual.blendingMode = .behindWindow
         visual.state = .active
+        visual.wantsLayer = true
         contentView = visual
         apply(region)
     }
@@ -30,7 +31,12 @@ import RegionBlurCore
         case .popover: .popover
         case .underWindowBackground: .underWindowBackground
         }
-        alphaValue = region.effect.opacity
+        // NSVisualEffectView does not expose a blur-radius API. Combine its
+        // live material with view alpha and a subtle tint so the slider has an
+        // immediate, visible effect without capturing the screen.
+        alphaValue = 1
+        visual.alphaValue = CGFloat(0.35 + (region.effect.opacity * 0.65))
+        visual.layer?.backgroundColor = NSColor.black.withAlphaComponent(CGFloat((1 - region.effect.opacity) * 0.32)).cgColor
         ignoresMouseEvents = region.ignoresMouseEvents
         if region.isHidden || !globallyVisible { orderOut(nil) } else { orderFrontRegardless() }
     }
