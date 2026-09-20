@@ -121,6 +121,7 @@ import RegionBlurCore
             let panel = panels[region.id] ?? { let p = OverlayPanel(region: region); panels[region.id] = p; return p }()
             panel.apply(region, globallyVisible: allVisible)
         }
+        buildMenu()
     }
 
     @objc private func beginSelection() {
