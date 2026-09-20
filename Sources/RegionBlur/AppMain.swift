@@ -85,6 +85,7 @@ import ApplicationServices
     private var trackingTimer: Timer?
     private var trackedRegionID: UUID?
     private var trackedWindow: AXUIElement?
+    private var trackedPID: pid_t?
     private var trackedOffset = CGSize.zero
     private var pendingWindowApp: NSRunningApplication?
 
@@ -177,44 +178,30 @@ import ApplicationServices
     }
     @objc private func attachToFrontWindow() {
         guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
-        guard AXIsProcessTrusted() else {
-            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            return
-        }
         guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
         attach(regionID: id, to: app)
     }
     @objc private func createAttachedRegion() {
-        guard AXIsProcessTrusted() else {
-            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            return
-        }
         guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
         pendingWindowApp = app
         beginSelection()
     }
     private func attach(regionID id: UUID, to app: NSRunningApplication) {
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement], let window = windows.first,
-              let bounds = windowFrame(window) else { return }
+        guard let bounds = firstWindowFrame(pid: app.processIdentifier) else { return }
         guard let region = manager.regions.first(where: { $0.id == id }) else { return }
-        trackedRegionID = id; trackedWindow = window
+        trackedRegionID = id; trackedWindow = nil; trackedPID = app.processIdentifier
         trackedOffset = CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY)
         trackingTimer?.invalidate()
         trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindow() }
         updateTrackedWindow()
     }
     @objc private func stopTracking() {
-        trackedRegionID = nil; trackedWindow = nil; trackingTimer?.invalidate(); trackingTimer = nil
+        trackedRegionID = nil; trackedWindow = nil; trackedPID = nil; trackingTimer?.invalidate(); trackingTimer = nil
         guard let id = selectedRegionID ?? manager.regions.last?.id, var region = manager.regions.first(where: { $0.id == id }) else { return }
         region.mode = .fixed; region.attachment = nil; manager.update(region)
     }
     private func updateTrackedWindow() {
-        guard let id = trackedRegionID, let window = trackedWindow, let bounds = windowFrame(window), var region = manager.regions.first(where: { $0.id == id }) else { return }
+        guard let id = trackedRegionID, let pid = trackedPID, let bounds = firstWindowFrame(pid: pid), var region = manager.regions.first(where: { $0.id == id }) else { return }
         region.mode = .attached
         region.frame.origin = CGPoint(x: bounds.minX + trackedOffset.width, y: bounds.minY + trackedOffset.height)
         manager.update(region)
@@ -228,6 +215,18 @@ import ApplicationServices
         guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &point), AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) else { return nil }
         let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
         return CGRect(x: point.x, y: screenHeight - point.y - size.height, width: size.width, height: size.height)
+    }
+    private func firstWindowFrame(pid: pid_t) -> CGRect? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for info in list {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32, ownerPID == pid,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"], w > 80, h > 50 else { continue }
+            let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+            return CGRect(x: x, y: screenHeight - y - h, width: w, height: h)
+        }
+        return nil
     }
     @objc private func openClaritySlider() {
         guard let id = selectedRegionID ?? manager.regions.last?.id,
