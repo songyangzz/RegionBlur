@@ -37,11 +37,13 @@ public struct WindowAttachment: Codable, Equatable, Sendable {
     public var bundleIdentifier: String
     public var windowTitle: String?
     public var relativeFrame: RectValue
+    public var processID: Int32?
 
-    public init(bundleIdentifier: String, windowTitle: String?, relativeFrame: RectValue) {
+    public init(bundleIdentifier: String, windowTitle: String?, relativeFrame: RectValue, processID: Int32? = nil) {
         self.bundleIdentifier = bundleIdentifier
         self.windowTitle = windowTitle
         self.relativeFrame = relativeFrame
+        self.processID = processID
     }
 }
 

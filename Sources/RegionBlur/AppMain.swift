@@ -98,6 +98,7 @@ import ApplicationServices
         statusItem.button?.title = "◫"
         buildMenu()
         manager.reloadPresentation()
+        restoreSavedBindings()
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.modifierFlags.contains([.command, .option]) && event.keyCode == 11 { self?.beginSelection() }
         }
@@ -192,6 +193,10 @@ import ApplicationServices
         guard let bounds = firstWindowFrame(pid: app.processIdentifier) else { return }
         guard let region = manager.regions.first(where: { $0.id == id }) else { return }
         bindings[id] = WindowBinding(pid: app.processIdentifier, offset: CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY))
+        var attachedRegion = region
+        attachedRegion.mode = .attached
+        attachedRegion.attachment = WindowAttachment(bundleIdentifier: app.bundleIdentifier ?? "", windowTitle: nil, relativeFrame: RectValue(region.frame), processID: app.processIdentifier)
+        manager.update(attachedRegion)
         if trackingTimer == nil {
             trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindows() }
         }
@@ -205,10 +210,22 @@ import ApplicationServices
     }
     private func updateTrackedWindows() {
         for (id, binding) in bindings {
-            guard let bounds = firstWindowFrame(pid: binding.pid), var region = manager.regions.first(where: { $0.id == id }) else { continue }
+            guard var region = manager.regions.first(where: { $0.id == id }) else { continue }
+            guard let bounds = firstWindowFrame(pid: binding.pid) else {
+                panels[id]?.orderOut(nil)
+                continue
+            }
             region.mode = .attached
             region.frame.origin = CGPoint(x: bounds.minX + binding.offset.width, y: bounds.minY + binding.offset.height)
             manager.update(region)
+            panels[id]?.apply(region, globallyVisible: allVisible)
+        }
+    }
+    private func restoreSavedBindings() {
+        for region in manager.regions where region.mode == .attached {
+            guard let attachment = region.attachment else { continue }
+            let app = NSRunningApplication.runningApplications(withBundleIdentifier: attachment.bundleIdentifier).first
+            if let app { attach(regionID: region.id, to: app) }
         }
     }
     private func windowFrame(_ window: AXUIElement) -> CGRect? {
