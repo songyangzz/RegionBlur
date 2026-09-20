@@ -1,0 +1,62 @@
+import Foundation
+import CoreGraphics
+import RegionBlurCore
+
+struct TestFailure: Error, CustomStringConvertible {
+    let description: String
+}
+
+func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
+    if !condition() { throw TestFailure(description: message) }
+}
+
+func testRegionNormalization() throws {
+    let region = BlurRegion(frame: CGRect(x: 100, y: 80, width: -40, height: -10))
+    guard let result = region.normalized(minimumSize: CGSize(width: 24, height: 24)) else {
+        throw TestFailure(description: "valid geometry was rejected")
+    }
+    try expect(result.frame == CGRect(x: 100, y: 80, width: 40, height: 24), "geometry was not clamped: \(result.frame)")
+    try expect(BlurRegion(frame: CGRect(x: CGFloat.nan, y: 0, width: 10, height: 10)).normalized(minimumSize: CGSize(width: 24, height: 24)) == nil, "non-finite geometry accepted")
+}
+
+func testRegionCodableRoundTrip() throws {
+    var region = BlurRegion(frame: CGRect(x: 1, y: 2, width: 3, height: 4))
+    region.mode = .attached
+    region.attachment = WindowAttachment(bundleIdentifier: "com.example.App", windowTitle: "Document", relativeFrame: RectValue(region.frame))
+    let decoded = try JSONDecoder().decode(BlurRegion.self, from: JSONEncoder().encode(region))
+    try expect(decoded == region, "round trip changed region")
+}
+
+func testSettingsStore() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("settings.json")
+    let store = SettingsStore(url: url)
+    let empty = try store.load()
+    try expect(empty == AppSettings(), "missing file was not empty")
+    let expected = AppSettings(regions: [BlurRegion(frame: CGRect(x: 1, y: 2, width: 80, height: 60))])
+    try store.save(expected)
+    let loaded = try store.load()
+    try expect(loaded == expected, "settings round trip failed")
+    try Data("{broken".utf8).write(to: url)
+    let recovered = try store.load()
+    try expect(recovered.regions.isEmpty, "corrupt file did not recover")
+    try expect(FileManager.default.fileExists(atPath: url.appendingPathExtension("corrupt").path), "corrupt backup missing")
+}
+
+@main
+enum TestMain {
+    static func main() throws {
+        let tests: [(String, () throws -> Void)] = [
+            ("region normalization", testRegionNormalization),
+            ("region codable", testRegionCodableRoundTrip),
+            ("settings store", testSettingsStore)
+        ]
+        for (name, test) in tests {
+            try test()
+            print("PASS \(name)")
+        }
+        print("PASS \(tests.count) tests")
+    }
+}
