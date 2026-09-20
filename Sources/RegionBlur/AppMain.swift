@@ -73,6 +73,8 @@ import RegionBlurCore
     private var selectionWindows: [NSWindow] = []
     private var allVisible = true
     private var selectedRegionID: UUID?
+    private var clarityWindow: NSWindow?
+    private var claritySlider: NSSlider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -93,10 +95,8 @@ import RegionBlurCore
     private func buildMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "新建模糊区域  ⌥⌘B", action: #selector(beginSelection), keyEquivalent: "")
-        menu.addItem(withTitle: "删除当前区域", action: #selector(deleteSelected), keyEquivalent: "")
-        menu.addItem(withTitle: "清晰度：高", action: #selector(setClarityHigh), keyEquivalent: "")
-        menu.addItem(withTitle: "清晰度：中", action: #selector(setClarityMedium), keyEquivalent: "")
-        menu.addItem(withTitle: "清晰度：低（更模糊）", action: #selector(setClarityLow), keyEquivalent: "")
+        menu.addItem(withTitle: "删除当前/最近区域", action: #selector(deleteSelected), keyEquivalent: "")
+        menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -137,16 +137,31 @@ import RegionBlurCore
 
     @objc private func toggleAll() { allVisible.toggle(); manager.reloadPresentation(); refresh(manager.regions) }
     @objc private func deleteSelected() {
-        guard let selectedRegionID else { return }
-        manager.delete(id: selectedRegionID)
+        guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
+        manager.delete(id: id)
         self.selectedRegionID = nil
     }
-    @objc private func setClarityHigh() { setSelectedOpacity(0.92) }
-    @objc private func setClarityMedium() { setSelectedOpacity(0.72) }
-    @objc private func setClarityLow() { setSelectedOpacity(0.52) }
-    private func setSelectedOpacity(_ value: Double) {
-        guard let selectedRegionID, var region = manager.regions.first(where: { $0.id == selectedRegionID }) else { return }
-        region.effect.opacity = value
+    @objc private func openClaritySlider() {
+        guard let id = selectedRegionID ?? manager.regions.last?.id,
+              let region = manager.regions.first(where: { $0.id == id }) else { return }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 92), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "区域清晰度"
+        let slider = NSSlider(value: region.effect.opacity, minValue: 0.15, maxValue: 1.0, target: self, action: #selector(clarityChanged(_:)))
+        slider.frame = NSRect(x: 24, y: 38, width: 252, height: 24)
+        slider.tag = id.hashValue
+        let label = NSTextField(labelWithString: "更左边更模糊，更右边更清晰")
+        label.frame = NSRect(x: 24, y: 14, width: 252, height: 18)
+        label.font = .systemFont(ofSize: 12)
+        window.contentView = NSView(frame: window.frame)
+        window.contentView?.addSubview(slider)
+        window.contentView?.addSubview(label)
+        window.center(); window.makeKeyAndOrderFront(nil)
+        clarityWindow = window; claritySlider = slider
+    }
+    @objc private func clarityChanged(_ slider: NSSlider) {
+        guard let id = selectedRegionID ?? manager.regions.last?.id,
+              var region = manager.regions.first(where: { $0.id == id }) else { return }
+        region.effect.opacity = slider.doubleValue
         manager.update(region)
     }
     @objc private func quit() { NSApp.terminate(nil) }
