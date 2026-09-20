@@ -66,6 +66,16 @@ func testRegionManagerLifecycle() throws {
     try expect(manager.regions.isEmpty, "region was not deleted")
 }
 
+func testRegionManagerUpdatesEffectAndDeletesSelectedRegion() throws {
+    let manager = try RegionManager(store: MemorySettingsStore())
+    var region = manager.create(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+    region.effect.opacity = 0.35
+    manager.update(region)
+    try expect(manager.regions.first?.effect.opacity == 0.35, "clarity update was not stored")
+    manager.delete(id: region.id)
+    try expect(manager.regions.isEmpty, "selected region was not deleted")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -74,6 +84,7 @@ enum TestMain {
             ("region codable", testRegionCodableRoundTrip),
             ("settings store", testSettingsStore)
             ,("region manager", testRegionManagerLifecycle)
+            ,("region edit and delete", testRegionManagerUpdatesEffectAndDeletesSelectedRegion)
         ]
         for (name, test) in tests {
             try test()

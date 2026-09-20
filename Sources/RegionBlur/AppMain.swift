@@ -72,6 +72,7 @@ import RegionBlurCore
     private var statusItem: NSStatusItem!
     private var selectionWindows: [NSWindow] = []
     private var allVisible = true
+    private var selectedRegionID: UUID?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -92,6 +93,10 @@ import RegionBlurCore
     private func buildMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "新建模糊区域  ⌥⌘B", action: #selector(beginSelection), keyEquivalent: "")
+        menu.addItem(withTitle: "删除当前区域", action: #selector(deleteSelected), keyEquivalent: "")
+        menu.addItem(withTitle: "清晰度：高", action: #selector(setClarityHigh), keyEquivalent: "")
+        menu.addItem(withTitle: "清晰度：中", action: #selector(setClarityMedium), keyEquivalent: "")
+        menu.addItem(withTitle: "清晰度：低（更模糊）", action: #selector(setClarityLow), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -118,7 +123,8 @@ import RegionBlurCore
                 guard let self, let window else { return }
                 if let localRect, localRect.width >= 24, localRect.height >= 24 {
                     let origin = window.convertToScreen(NSRect(origin: localRect.origin, size: .zero)).origin
-                    _ = self.manager.create(frame: CGRect(origin: origin, size: localRect.size))
+                    let region = self.manager.create(frame: CGRect(origin: origin, size: localRect.size))
+                    self.selectedRegionID = region.id
                 }
                 self.finishSelection()
             }
@@ -130,6 +136,19 @@ import RegionBlurCore
     private func finishSelection() { selectionWindows.forEach { $0.orderOut(nil) }; selectionWindows.removeAll() }
 
     @objc private func toggleAll() { allVisible.toggle(); manager.reloadPresentation(); refresh(manager.regions) }
+    @objc private func deleteSelected() {
+        guard let selectedRegionID else { return }
+        manager.delete(id: selectedRegionID)
+        self.selectedRegionID = nil
+    }
+    @objc private func setClarityHigh() { setSelectedOpacity(0.92) }
+    @objc private func setClarityMedium() { setSelectedOpacity(0.72) }
+    @objc private func setClarityLow() { setSelectedOpacity(0.52) }
+    private func setSelectedOpacity(_ value: Double) {
+        guard let selectedRegionID, var region = manager.regions.first(where: { $0.id == selectedRegionID }) else { return }
+        region.effect.opacity = value
+        manager.update(region)
+    }
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
