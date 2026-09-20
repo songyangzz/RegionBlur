@@ -73,6 +73,10 @@ import ApplicationServices
 }
 
 @MainActor final class AppController: NSObject, NSApplicationDelegate {
+    private struct WindowBinding {
+        var pid: pid_t
+        var offset: CGSize
+    }
     private let store = SettingsStore.applicationStore()
     private var manager: RegionManager!
     private var panels: [UUID: OverlayPanel] = [:]
@@ -83,10 +87,7 @@ import ApplicationServices
     private var clarityWindow: NSWindow?
     private var claritySlider: NSSlider?
     private var trackingTimer: Timer?
-    private var trackedRegionID: UUID?
-    private var trackedWindow: AXUIElement?
-    private var trackedPID: pid_t?
-    private var trackedOffset = CGSize.zero
+    private var bindings: [UUID: WindowBinding] = [:]
     private var pendingWindowApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -189,22 +190,25 @@ import ApplicationServices
     private func attach(regionID id: UUID, to app: NSRunningApplication) {
         guard let bounds = firstWindowFrame(pid: app.processIdentifier) else { return }
         guard let region = manager.regions.first(where: { $0.id == id }) else { return }
-        trackedRegionID = id; trackedWindow = nil; trackedPID = app.processIdentifier
-        trackedOffset = CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY)
-        trackingTimer?.invalidate()
-        trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindow() }
-        updateTrackedWindow()
+        bindings[id] = WindowBinding(pid: app.processIdentifier, offset: CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY))
+        if trackingTimer == nil {
+            trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindows() }
+        }
+        updateTrackedWindows()
     }
     @objc private func stopTracking() {
-        trackedRegionID = nil; trackedWindow = nil; trackedPID = nil; trackingTimer?.invalidate(); trackingTimer = nil
         guard let id = selectedRegionID ?? manager.regions.last?.id, var region = manager.regions.first(where: { $0.id == id }) else { return }
+        bindings.removeValue(forKey: id)
+        if bindings.isEmpty { trackingTimer?.invalidate(); trackingTimer = nil }
         region.mode = .fixed; region.attachment = nil; manager.update(region)
     }
-    private func updateTrackedWindow() {
-        guard let id = trackedRegionID, let pid = trackedPID, let bounds = firstWindowFrame(pid: pid), var region = manager.regions.first(where: { $0.id == id }) else { return }
-        region.mode = .attached
-        region.frame.origin = CGPoint(x: bounds.minX + trackedOffset.width, y: bounds.minY + trackedOffset.height)
-        manager.update(region)
+    private func updateTrackedWindows() {
+        for (id, binding) in bindings {
+            guard let bounds = firstWindowFrame(pid: binding.pid), var region = manager.regions.first(where: { $0.id == id }) else { continue }
+            region.mode = .attached
+            region.frame.origin = CGPoint(x: bounds.minX + binding.offset.width, y: bounds.minY + binding.offset.height)
+            manager.update(region)
+        }
     }
     private func windowFrame(_ window: AXUIElement) -> CGRect? {
         var positionRef: CFTypeRef?; var sizeRef: CFTypeRef?
