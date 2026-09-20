@@ -86,6 +86,7 @@ import ApplicationServices
     private var trackedRegionID: UUID?
     private var trackedWindow: AXUIElement?
     private var trackedOffset = CGSize.zero
+    private var pendingWindowApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -119,6 +120,7 @@ import ApplicationServices
         menu.addItem(withTitle: "删除当前/最近区域", action: #selector(deleteSelected), keyEquivalent: "")
         menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
         menu.addItem(withTitle: "跟随当前窗口", action: #selector(attachToFrontWindow), keyEquivalent: "")
+        menu.addItem(withTitle: "选择窗口创建区域", action: #selector(createAttachedRegion), keyEquivalent: "")
         menu.addItem(withTitle: "停止跟随", action: #selector(stopTracking), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
@@ -149,6 +151,10 @@ import ApplicationServices
                     let origin = window.convertToScreen(NSRect(origin: localRect.origin, size: .zero)).origin
                     let region = self.manager.create(frame: CGRect(origin: origin, size: localRect.size))
                     self.selectedRegionID = region.id
+                    if let app = self.pendingWindowApp {
+                        self.pendingWindowApp = nil
+                        self.attach(regionID: region.id, to: app)
+                    }
                 }
                 self.finishSelection()
             }
@@ -171,9 +177,25 @@ import ApplicationServices
     }
     @objc private func attachToFrontWindow() {
         guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else { return }
+        guard AXIsProcessTrusted() else {
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            return
+        }
         guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        attach(regionID: id, to: app)
+    }
+    @objc private func createAttachedRegion() {
+        guard AXIsProcessTrusted() else {
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        pendingWindowApp = app
+        beginSelection()
+    }
+    private func attach(regionID id: UUID, to app: NSRunningApplication) {
         let element = AXUIElementCreateApplication(app.processIdentifier)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
