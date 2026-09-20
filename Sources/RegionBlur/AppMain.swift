@@ -234,7 +234,8 @@ import ApplicationServices
     private func updateTrackedWindows() {
         for (id, binding) in bindings {
             guard var region = manager.regions.first(where: { $0.id == id }) else { continue }
-            guard let bounds = firstWindowFrame(pid: binding.pid) else {
+            let appHidden = NSRunningApplication(processIdentifier: binding.pid)?.isHidden ?? false
+            guard !appHidden, let bounds = firstWindowFrame(pid: binding.pid) else {
                 panels[id]?.orderOut(nil)
                 continue
             }
@@ -266,6 +267,7 @@ import ApplicationServices
         for info in list {
             guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32, ownerPID == pid,
                   let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  (info[kCGWindowIsOnscreen as String] as? Bool ?? true),
                   let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"], w > 80, h > 50 else { continue }
             let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
