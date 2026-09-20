@@ -86,6 +86,7 @@ import ApplicationServices
     private var selectedRegionID: UUID?
     private var clarityWindow: NSWindow?
     private var claritySlider: NSSlider?
+    private var globalOpacity = 0.82
     private var trackingTimer: Timer?
     private var bindings: [UUID: WindowBinding] = [:]
     private var pendingWindowApp: NSRunningApplication?
@@ -233,16 +234,14 @@ import ApplicationServices
         return nil
     }
     @objc private func openClaritySlider() {
-        guard let id = selectedRegionID ?? manager.regions.last?.id,
-              let region = manager.regions.first(where: { $0.id == id }) else { return }
+        guard !manager.regions.isEmpty else { return }
         let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 92), styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
         window.title = "区域清晰度"
         window.level = .floating
         window.isReleasedWhenClosed = false
-        let slider = NSSlider(value: region.effect.opacity, minValue: 0.15, maxValue: 1.0, target: self, action: #selector(clarityChanged(_:)))
+        let slider = NSSlider(value: globalOpacity, minValue: 0.15, maxValue: 1.0, target: self, action: #selector(clarityChanged(_:)))
         slider.frame = NSRect(x: 24, y: 38, width: 252, height: 24)
-        slider.tag = id.hashValue
-        let label = NSTextField(labelWithString: "左边更清晰，右边更模糊")
+        let label = NSTextField(labelWithString: "全局清晰度：左边更清晰，右边更模糊")
         label.frame = NSRect(x: 24, y: 14, width: 252, height: 18)
         label.font = .systemFont(ofSize: 12)
         window.contentView = NSView(frame: window.frame)
@@ -255,10 +254,11 @@ import ApplicationServices
         clarityWindow = window; claritySlider = slider
     }
     @objc private func clarityChanged(_ slider: NSSlider) {
-        guard let id = selectedRegionID ?? manager.regions.last?.id,
-              var region = manager.regions.first(where: { $0.id == id }) else { return }
-        region.effect.opacity = slider.doubleValue
-        manager.update(region)
+        globalOpacity = slider.doubleValue
+        for var region in manager.regions {
+            region.effect.opacity = globalOpacity
+            manager.update(region)
+        }
     }
     @objc private func quit() { NSApp.terminate(nil) }
 }
