@@ -172,7 +172,7 @@ import RegionBlurCore
         let slider = NSSlider(value: region.effect.opacity, minValue: 0.15, maxValue: 1.0, target: self, action: #selector(clarityChanged(_:)))
         slider.frame = NSRect(x: 24, y: 38, width: 252, height: 24)
         slider.tag = id.hashValue
-        let label = NSTextField(labelWithString: "更左边更模糊，更右边更清晰")
+        let label = NSTextField(labelWithString: "左边更清晰，右边更模糊")
         label.frame = NSRect(x: 24, y: 14, width: 252, height: 18)
         label.font = .systemFont(ofSize: 12)
         window.contentView = NSView(frame: window.frame)
