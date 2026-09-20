@@ -95,6 +95,16 @@ import RegionBlurCore
     private func buildMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "新建模糊区域  ⌥⌘B", action: #selector(beginSelection), keyEquivalent: "")
+        let selectItem = NSMenuItem(title: "选择已有区域", action: nil, keyEquivalent: "")
+        let selectMenu = NSMenu()
+        for (index, region) in manager?.regions.enumerated() ?? [].enumerated() {
+            let item = NSMenuItem(title: "区域 \(index + 1)", action: #selector(selectRegion(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = region.id.uuidString
+            selectMenu.addItem(item)
+        }
+        selectItem.submenu = selectMenu
+        menu.addItem(selectItem)
         menu.addItem(withTitle: "删除当前/最近区域", action: #selector(deleteSelected), keyEquivalent: "")
         menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
@@ -140,6 +150,10 @@ import RegionBlurCore
         guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
         manager.delete(id: id)
         self.selectedRegionID = nil
+    }
+    @objc private func selectRegion(_ item: NSMenuItem) {
+        guard let idString = item.representedObject as? String, let id = UUID(uuidString: idString) else { return }
+        selectedRegionID = id
     }
     @objc private func openClaritySlider() {
         guard let id = selectedRegionID ?? manager.regions.last?.id,
