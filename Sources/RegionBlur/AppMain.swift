@@ -165,8 +165,10 @@ import RegionBlurCore
     @objc private func openClaritySlider() {
         guard let id = selectedRegionID ?? manager.regions.last?.id,
               let region = manager.regions.first(where: { $0.id == id }) else { return }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 92), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 92), styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
         window.title = "区域清晰度"
+        window.level = .floating
+        window.isReleasedWhenClosed = false
         let slider = NSSlider(value: region.effect.opacity, minValue: 0.15, maxValue: 1.0, target: self, action: #selector(clarityChanged(_:)))
         slider.frame = NSRect(x: 24, y: 38, width: 252, height: 24)
         slider.tag = id.hashValue
@@ -176,7 +178,10 @@ import RegionBlurCore
         window.contentView = NSView(frame: window.frame)
         window.contentView?.addSubview(slider)
         window.contentView?.addSubview(label)
-        window.center(); window.makeKeyAndOrderFront(nil)
+        window.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
+        window.makeKey()
         clarityWindow = window; claritySlider = slider
     }
     @objc private func clarityChanged(_ slider: NSSlider) {
