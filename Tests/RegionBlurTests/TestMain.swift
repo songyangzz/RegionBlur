@@ -45,6 +45,27 @@ func testSettingsStore() throws {
     try expect(FileManager.default.fileExists(atPath: url.appendingPathExtension("corrupt").path), "corrupt backup missing")
 }
 
+final class MemorySettingsStore: SettingsStoring {
+    var settings = AppSettings()
+    func load() throws -> AppSettings { settings }
+    func save(_ settings: AppSettings) throws { self.settings = settings }
+}
+
+func testRegionManagerLifecycle() throws {
+    let store = MemorySettingsStore()
+    var changes = 0
+    let manager = try RegionManager(store: store) { _ in changes += 1 }
+    let region = manager.create(frame: CGRect(x: 10, y: 20, width: 100, height: 80))
+    try expect(manager.regions == [region], "region was not created")
+    try expect(store.settings.regions == [region], "region was not persisted")
+    try expect(changes == 1, "create did not notify presenter")
+    manager.setAllVisible(false)
+    try expect(manager.allVisible == false, "global visibility not updated")
+    try expect(manager.regions[0].isHidden == false, "global hide changed persisted per-region state")
+    manager.delete(id: region.id)
+    try expect(manager.regions.isEmpty, "region was not deleted")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -52,6 +73,7 @@ enum TestMain {
             ("region normalization", testRegionNormalization),
             ("region codable", testRegionCodableRoundTrip),
             ("settings store", testSettingsStore)
+            ,("region manager", testRegionManagerLifecycle)
         ]
         for (name, test) in tests {
             try test()
