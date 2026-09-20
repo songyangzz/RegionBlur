@@ -90,6 +90,7 @@ import ApplicationServices
     private var trackingTimer: Timer?
     private var bindings: [UUID: WindowBinding] = [:]
     private var pendingWindowApp: NSRunningApplication?
+    private var pickingWindow = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -124,7 +125,7 @@ import ApplicationServices
         menu.addItem(withTitle: "删除当前/最近区域", action: #selector(deleteSelected), keyEquivalent: "")
         menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
         menu.addItem(withTitle: "跟随当前窗口", action: #selector(attachToFrontWindow), keyEquivalent: "")
-        menu.addItem(withTitle: "选择窗口创建区域", action: #selector(createAttachedRegion), keyEquivalent: "")
+        menu.addItem(withTitle: "点选窗口创建区域", action: #selector(createAttachedRegion), keyEquivalent: "")
         menu.addItem(withTitle: "停止跟随", action: #selector(stopTracking), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
@@ -158,6 +159,13 @@ import ApplicationServices
                     if let app = self.pendingWindowApp {
                         self.pendingWindowApp = nil
                         self.attach(regionID: region.id, to: app)
+                    } else if self.pickingWindow {
+                        let center = CGPoint(x: localRect.midX, y: localRect.midY)
+                        let screenPoint = window.convertToScreen(NSRect(origin: center, size: .zero)).origin
+                        if let app = self.applicationAtScreenPoint(screenPoint) {
+                            self.attach(regionID: region.id, to: app)
+                        }
+                        self.pickingWindow = false
                     }
                 }
                 self.finishSelection()
@@ -185,9 +193,24 @@ import ApplicationServices
         attach(regionID: id, to: app)
     }
     @objc private func createAttachedRegion() {
-        guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
-        pendingWindowApp = app
+        pendingWindowApp = nil
+        pickingWindow = true
         beginSelection()
+    }
+    private func applicationAtScreenPoint(_ point: CGPoint) -> NSRunningApplication? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        let cgPoint = CGPoint(x: point.x, y: screenHeight - point.y)
+        for info in list {
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int32,
+                  pid != ProcessInfo.processInfo.processIdentifier,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let rawBounds = info[kCGWindowBounds as String] else { continue }
+            let bounds = rawBounds as! CFDictionary
+            guard let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(cgPoint) else { continue }
+            return NSRunningApplication(processIdentifier: pid)
+        }
+        return nil
     }
     private func attach(regionID id: UUID, to app: NSRunningApplication) {
         guard let bounds = firstWindowFrame(pid: app.processIdentifier) else { return }
