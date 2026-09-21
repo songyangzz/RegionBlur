@@ -85,6 +85,7 @@ import ApplicationServices
     private let store = SettingsStore.applicationStore()
     private var manager: RegionManager!
     private var panels: [UUID: OverlayPanel] = [:]
+    private var runtimeHiddenRegionIDs: Set<UUID> = []
     private var statusItem: NSStatusItem!
     private var selectionWindows: [NSWindow] = []
     private var allVisible = true
@@ -150,7 +151,7 @@ import ApplicationServices
         for (id, panel) in panels where !ids.contains(id) { panel.close(); panels.removeValue(forKey: id) }
         for region in regions {
             let panel = panels[region.id] ?? { let p = OverlayPanel(region: region); panels[region.id] = p; return p }()
-            panel.apply(region, globallyVisible: allVisible)
+            panel.apply(region, globallyVisible: allVisible && !runtimeHiddenRegionIDs.contains(region.id))
         }
         buildMenu()
     }
@@ -199,6 +200,8 @@ import ApplicationServices
     @objc private func toggleAll() { allVisible.toggle(); manager.reloadPresentation(); refresh(manager.regions) }
     @objc private func deleteSelected() {
         guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
+        runtimeHiddenRegionIDs.remove(id)
+        bindings.removeValue(forKey: id)
         manager.delete(id: id)
         self.selectedRegionID = nil
     }
@@ -305,14 +308,20 @@ import ApplicationServices
             let minimized = binding.element.map(isWindowMinimized) ?? false
             let exactState = exactFrame.map { WindowState(frame: $0, fullyCovered: isFrameFullyCovered($0, pid: binding.pid)) }
             guard !appHidden, !minimized, let state = exactState ?? windowState(pid: binding.pid), !state.fullyCovered else {
+                runtimeHiddenRegionIDs.insert(id)
                 panels[id]?.orderOut(nil)
                 continue
             }
+            runtimeHiddenRegionIDs.remove(id)
             let bounds = state.frame
             region.mode = .attached
-            region.frame.origin = CGPoint(x: bounds.minX + binding.offset.width, y: bounds.minY + binding.offset.height)
-            manager.update(region)
-            panels[id]?.apply(region, globallyVisible: allVisible)
+            let newOrigin = CGPoint(x: bounds.minX + binding.offset.width, y: bounds.minY + binding.offset.height)
+            if abs(region.frame.minX - newOrigin.x) > 0.5 || abs(region.frame.minY - newOrigin.y) > 0.5 {
+                region.frame.origin = newOrigin
+                manager.update(region)
+            } else {
+                panels[id]?.apply(region, globallyVisible: allVisible)
+            }
         }
     }
     private func restoreSavedBindings() {
