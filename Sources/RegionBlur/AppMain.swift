@@ -302,7 +302,9 @@ import ApplicationServices
             guard var region = manager.regions.first(where: { $0.id == id }) else { continue }
             let appHidden = NSRunningApplication(processIdentifier: binding.pid)?.isHidden ?? false
             let exactFrame = binding.element.flatMap(windowFrame)
-            guard !appHidden, let state = exactFrame.map({ WindowState(frame: $0, fullyCovered: false) }) ?? windowState(pid: binding.pid), !state.fullyCovered else {
+            let minimized = binding.element.map(isWindowMinimized) ?? false
+            let exactState = exactFrame.map { WindowState(frame: $0, fullyCovered: isFrameFullyCovered($0, pid: binding.pid)) }
+            guard !appHidden, !minimized, let state = exactState ?? windowState(pid: binding.pid), !state.fullyCovered else {
                 panels[id]?.orderOut(nil)
                 continue
             }
@@ -329,6 +331,31 @@ import ApplicationServices
         guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &point), AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) else { return nil }
         let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
         return CGRect(x: point.x, y: screenHeight - point.y - size.height, width: size.width, height: size.height)
+    }
+    private func isWindowMinimized(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success else { return false }
+        return (value as? Bool) ?? false
+    }
+    private func isFrameFullyCovered(_ target: CGRect, pid: pid_t) -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        var occluders: [CGRect] = []
+        for info in list {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"] else { continue }
+            let frame = CGRect(x: x, y: screenHeight - y - h, width: w, height: h)
+            if ownerPID == pid && approximatelyEqual(frame, target) {
+                return WindowOcclusion.isFullyCovered(target: target, by: occluders)
+            }
+            if ownerPID != ProcessInfo.processInfo.processIdentifier { occluders.append(frame) }
+        }
+        return true
+    }
+    private func approximatelyEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 3 && abs(lhs.minY - rhs.minY) < 3 && abs(lhs.width - rhs.width) < 3 && abs(lhs.height - rhs.height) < 3
     }
     private func firstWindowFrame(pid: pid_t) -> CGRect? {
         windowState(pid: pid)?.frame
