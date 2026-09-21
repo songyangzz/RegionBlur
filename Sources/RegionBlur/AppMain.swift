@@ -120,8 +120,6 @@ import ApplicationServices
     private var globalOpacity = 0.82
     private var trackingTimer: Timer?
     private var bindings: [UUID: WindowBinding] = [:]
-    private var pendingWindowApp: NSRunningApplication?
-    private var pickingWindow = false
     private var automaticWindowPicking = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -156,14 +154,11 @@ import ApplicationServices
         menu.addItem(selectItem)
         menu.addItem(withTitle: "删除当前/最近区域", action: #selector(deleteSelected), keyEquivalent: "")
         menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
-        menu.addItem(withTitle: "跟随当前窗口", action: #selector(attachToFrontWindow), keyEquivalent: "")
-        menu.addItem(withTitle: "点选窗口创建区域", action: #selector(createAttachedRegion), keyEquivalent: "")
         menu.addItem(withTitle: "授权辅助功能", action: #selector(requestAccessibility), keyEquivalent: "")
         let permissionItem = NSMenuItem(title: AXIsProcessTrusted() ? "辅助功能：已授权" : "辅助功能：未授权", action: nil, keyEquivalent: "")
         permissionItem.isEnabled = false
         menu.addItem(permissionItem)
-        menu.addItem(withTitle: "点选窗口并自动遮罩", action: #selector(beginAutomaticWindowPick), keyEquivalent: "")
-        menu.addItem(withTitle: "停止跟随", action: #selector(stopTracking), keyEquivalent: "")
+        menu.addItem(withTitle: MenuConfiguration.windowTrackingTitles[0], action: #selector(beginAutomaticWindowPick), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -203,17 +198,6 @@ import ApplicationServices
                     let origin = window.convertToScreen(NSRect(origin: localRect.origin, size: .zero)).origin
                     let region = self.manager.create(frame: CGRect(origin: origin, size: localRect.size))
                     self.selectedRegionID = region.id
-                    if let app = self.pendingWindowApp {
-                        self.pendingWindowApp = nil
-                        self.attach(regionID: region.id, to: app)
-                    } else if self.pickingWindow {
-                        let center = CGPoint(x: localRect.midX, y: localRect.midY)
-                        let screenPoint = window.convertToScreen(NSRect(origin: center, size: .zero)).origin
-                        if let app = self.applicationAtScreenPoint(screenPoint) {
-                            self.attach(regionID: region.id, to: app)
-                        }
-                        self.pickingWindow = false
-                    }
                 }
                 self.finishSelection()
             }
@@ -236,16 +220,6 @@ import ApplicationServices
     @objc private func selectRegion(_ item: NSMenuItem) {
         guard let idString = item.representedObject as? String, let id = UUID(uuidString: idString) else { return }
         selectedRegionID = id
-    }
-    @objc private func attachToFrontWindow() {
-        guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
-        guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
-        attach(regionID: id, to: app)
-    }
-    @objc private func createAttachedRegion() {
-        pendingWindowApp = nil
-        pickingWindow = true
-        beginSelection()
     }
     @objc private func requestAccessibility() {
         guard !AXIsProcessTrusted() else {
@@ -289,21 +263,6 @@ import ApplicationServices
            let windowValue { return (windowValue as! AXUIElement) }
         return element
     }
-    private func applicationAtScreenPoint(_ point: CGPoint) -> NSRunningApplication? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
-        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
-        let cgPoint = CGPoint(x: point.x, y: screenHeight - point.y)
-        for info in list {
-            guard let pid = info[kCGWindowOwnerPID as String] as? Int32,
-                  pid != ProcessInfo.processInfo.processIdentifier,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let rawBounds = info[kCGWindowBounds as String] else { continue }
-            let bounds = rawBounds as! CFDictionary
-            guard let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(cgPoint) else { continue }
-            return NSRunningApplication(processIdentifier: pid)
-        }
-        return nil
-    }
     private func windowFrameAtScreenPoint(_ point: CGPoint) -> CGRect? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
         let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
@@ -336,12 +295,6 @@ import ApplicationServices
             trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindows() }
         }
         updateTrackedWindows()
-    }
-    @objc private func stopTracking() {
-        guard let id = selectedRegionID ?? manager.regions.last?.id, var region = manager.regions.first(where: { $0.id == id }) else { return }
-        bindings.removeValue(forKey: id)
-        if bindings.isEmpty { trackingTimer?.invalidate(); trackingTimer = nil }
-        region.mode = .fixed; region.attachment = nil; manager.update(region)
     }
     private func updateTrackedWindows() {
         for (id, binding) in bindings {

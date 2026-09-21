@@ -83,6 +83,10 @@ func testWindowOcclusionRequiresCompleteCoverage() throws {
     try expect(!WindowOcclusion.isFullyCovered(target: target, by: [CGRect(x: 0, y: 0, width: 90, height: 100)]), "partial cover was treated as hidden")
 }
 
+func testWindowTrackingMenuIsUnified() throws {
+    try expect(MenuConfiguration.windowTrackingTitles == ["点选窗口并自动遮罩"], "window tracking menu still exposes legacy actions")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -93,6 +97,7 @@ enum TestMain {
             ,("region manager", testRegionManagerLifecycle)
             ,("region edit and delete", testRegionManagerUpdatesEffectAndDeletesSelectedRegion)
             ,("window occlusion", testWindowOcclusionRequiresCompleteCoverage)
+            ,("unified window tracking menu", testWindowTrackingMenuIsUnified)
         ]
         for (name, test) in tests {
             try test()
