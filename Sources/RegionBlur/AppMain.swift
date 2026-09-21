@@ -45,10 +45,29 @@ import ApplicationServices
 
 @MainActor final class SelectionView: NSView {
     var onFinish: ((CGRect?) -> Void)?
+    var highlightsWindows = false
+    var windowFrameAtScreenPoint: ((CGPoint) -> CGRect?)?
     private var start: CGPoint?
     private var current: CGPoint?
+    private var highlightedWindowRect: CGRect?
 
     override var acceptsFirstResponder: Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseMoved(with event: NSEvent) {
+        guard highlightsWindows, let window else { return }
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let screenPoint = window.convertToScreen(NSRect(origin: localPoint, size: .zero)).origin
+        if let globalFrame = windowFrameAtScreenPoint?(screenPoint) {
+            highlightedWindowRect = window.convertFromScreen(globalFrame)
+        } else {
+            highlightedWindowRect = nil
+        }
+        needsDisplay = true
+    }
     override func mouseDown(with event: NSEvent) {
         start = convert(event.locationInWindow, from: nil)
         current = start
@@ -65,6 +84,12 @@ import ApplicationServices
     }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.withAlphaComponent(0.18).setFill(); dirtyRect.fill()
+        if let highlightedWindowRect, highlightsWindows {
+            NSColor.systemBlue.withAlphaComponent(0.16).setFill(); highlightedWindowRect.fill()
+            let path = NSBezierPath(rect: highlightedWindowRect.insetBy(dx: 2, dy: 2))
+            path.lineWidth = 4
+            NSColor.systemBlue.setStroke(); path.stroke()
+        }
         guard let start, let current else { return }
         let rect = CGRect(x: min(start.x, current.x), y: min(start.y, current.y), width: abs(current.x - start.x), height: abs(current.y - start.y))
         NSColor.systemBlue.withAlphaComponent(0.8).setStroke(); NSBezierPath(rect: rect).stroke()
@@ -162,6 +187,8 @@ import ApplicationServices
             let window = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.level = .screenSaver; window.isOpaque = false; window.backgroundColor = .clear; window.ignoresMouseEvents = false
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            view.highlightsWindows = automaticWindowPicking
+            view.windowFrameAtScreenPoint = { [weak self] point in self?.windowFrameAtScreenPoint(point) }
             view.onFinish = { [weak self, weak window] localRect in
                 guard let self, let window else { return }
                 if self.automaticWindowPicking {
@@ -190,6 +217,7 @@ import ApplicationServices
                 }
                 self.finishSelection()
             }
+            window.acceptsMouseMovedEvents = true
             window.contentView = view; window.makeKeyAndOrderFront(nil); selectionWindows.append(window)
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -273,6 +301,21 @@ import ApplicationServices
             let bounds = rawBounds as! CFDictionary
             guard let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(cgPoint) else { continue }
             return NSRunningApplication(processIdentifier: pid)
+        }
+        return nil
+    }
+    private func windowFrameAtScreenPoint(_ point: CGPoint) -> CGRect? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        let cgPoint = CGPoint(x: point.x, y: screenHeight - point.y)
+        for info in list {
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int32,
+                  pid != ProcessInfo.processInfo.processIdentifier,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let rawBounds = info[kCGWindowBounds as String] else { continue }
+            let bounds = rawBounds as! CFDictionary
+            guard let cgRect = CGRect(dictionaryRepresentation: bounds), cgRect.contains(cgPoint) else { continue }
+            return CGRect(x: cgRect.minX, y: screenHeight - cgRect.maxY, width: cgRect.width, height: cgRect.height)
         }
         return nil
     }
