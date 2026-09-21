@@ -133,6 +133,9 @@ import ApplicationServices
         menu.addItem(withTitle: "跟随当前窗口", action: #selector(attachToFrontWindow), keyEquivalent: "")
         menu.addItem(withTitle: "点选窗口创建区域", action: #selector(createAttachedRegion), keyEquivalent: "")
         menu.addItem(withTitle: "授权辅助功能", action: #selector(requestAccessibility), keyEquivalent: "")
+        let permissionItem = NSMenuItem(title: AXIsProcessTrusted() ? "辅助功能：已授权" : "辅助功能：未授权", action: nil, keyEquivalent: "")
+        permissionItem.isEnabled = false
+        menu.addItem(permissionItem)
         menu.addItem(withTitle: "点选窗口并自动遮罩", action: #selector(beginAutomaticWindowPick), keyEquivalent: "")
         menu.addItem(withTitle: "停止跟随", action: #selector(stopTracking), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
@@ -165,7 +168,7 @@ import ApplicationServices
                     let point = window.convertToScreen(NSRect(origin: CGPoint(x: localRect.midX, y: localRect.midY), size: .zero)).origin
                     self.automaticWindowPicking = false
                     self.finishSelection()
-                    self.createAutomaticOverlay(at: point)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.createAutomaticOverlay(at: point) }
                     return
                 }
                 if let localRect, localRect.width >= 24, localRect.height >= 24 {
@@ -214,9 +217,14 @@ import ApplicationServices
         beginSelection()
     }
     @objc private func requestAccessibility() {
-        guard !AXIsProcessTrusted() else { return }
+        guard !AXIsProcessTrusted() else {
+            showAlert(title: "辅助功能已授权", message: "RegionBlur 当前可以读取窗口信息。")
+            buildMenu()
+            return
+        }
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+        buildMenu()
     }
     @objc private func beginAutomaticWindowPick() {
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
@@ -224,12 +232,20 @@ import ApplicationServices
         beginSelection()
     }
     private func createAutomaticOverlay(at screenPoint: CGPoint) {
-        guard let windowElement = accessibilityWindow(at: screenPoint), let frame = windowFrame(windowElement) else { return }
+        guard AXIsProcessTrusted() else { showAlert(title: "没有辅助功能权限", message: "请在系统设置中允许 RegionBlur 后重新尝试。"); buildMenu(); return }
+        guard let windowElement = accessibilityWindow(at: screenPoint), let frame = windowFrame(windowElement) else {
+            showAlert(title: "没有识别到窗口", message: "请点击普通应用窗口的内容区域，不要点击桌面、菜单栏或 RegionBlur 自己的面板。")
+            return
+        }
         var pid: pid_t = 0
         guard AXUIElementGetPid(windowElement, &pid) == .success, pid != ProcessInfo.processInfo.processIdentifier else { return }
         let region = manager.create(frame: frame)
         selectedRegionID = region.id
         attach(regionID: region.id, toPID: pid, element: windowElement)
+    }
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert(); alert.messageText = title; alert.informativeText = message; alert.alertStyle = .informational
+        NSApp.activate(ignoringOtherApps: true); alert.runModal()
     }
     private func accessibilityWindow(at screenPoint: CGPoint) -> AXUIElement? {
         let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
