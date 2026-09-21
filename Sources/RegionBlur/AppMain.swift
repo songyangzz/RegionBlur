@@ -77,6 +77,10 @@ import ApplicationServices
         var pid: pid_t
         var offset: CGSize
     }
+    private struct WindowState {
+        var frame: CGRect
+        var fullyCovered: Bool
+    }
     private let store = SettingsStore.applicationStore()
     private var manager: RegionManager!
     private var panels: [UUID: OverlayPanel] = [:]
@@ -235,10 +239,11 @@ import ApplicationServices
         for (id, binding) in bindings {
             guard var region = manager.regions.first(where: { $0.id == id }) else { continue }
             let appHidden = NSRunningApplication(processIdentifier: binding.pid)?.isHidden ?? false
-            guard !appHidden, let bounds = firstWindowFrame(pid: binding.pid) else {
+            guard !appHidden, let state = windowState(pid: binding.pid), !state.fullyCovered else {
                 panels[id]?.orderOut(nil)
                 continue
             }
+            let bounds = state.frame
             region.mode = .attached
             region.frame.origin = CGPoint(x: bounds.minX + binding.offset.width, y: bounds.minY + binding.offset.height)
             manager.update(region)
@@ -263,15 +268,23 @@ import ApplicationServices
         return CGRect(x: point.x, y: screenHeight - point.y - size.height, width: size.width, height: size.height)
     }
     private func firstWindowFrame(pid: pid_t) -> CGRect? {
+        windowState(pid: pid)?.frame
+    }
+    private func windowState(pid: pid_t) -> WindowState? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        var occluders: [CGRect] = []
         for info in list {
-            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32, ownerPID == pid,
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
                   let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
                   (info[kCGWindowIsOnscreen as String] as? Bool ?? true),
                   let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"], w > 80, h > 50 else { continue }
-            let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
-            return CGRect(x: x, y: screenHeight - y - h, width: w, height: h)
+            let frame = CGRect(x: x, y: screenHeight - y - h, width: w, height: h)
+            if ownerPID == pid {
+                return WindowState(frame: frame, fullyCovered: WindowOcclusion.isFullyCovered(target: frame, by: occluders))
+            }
+            if ownerPID != ProcessInfo.processInfo.processIdentifier { occluders.append(frame) }
         }
         return nil
     }

@@ -76,6 +76,13 @@ func testRegionManagerUpdatesEffectAndDeletesSelectedRegion() throws {
     try expect(manager.regions.isEmpty, "selected region was not deleted")
 }
 
+func testWindowOcclusionRequiresCompleteCoverage() throws {
+    let target = CGRect(x: 0, y: 0, width: 100, height: 100)
+    try expect(WindowOcclusion.isFullyCovered(target: target, by: [CGRect(x: 0, y: 0, width: 100, height: 100)]), "full cover was not detected")
+    try expect(WindowOcclusion.isFullyCovered(target: target, by: [CGRect(x: 0, y: 0, width: 50, height: 100), CGRect(x: 50, y: 0, width: 50, height: 100)]), "combined cover was not detected")
+    try expect(!WindowOcclusion.isFullyCovered(target: target, by: [CGRect(x: 0, y: 0, width: 90, height: 100)]), "partial cover was treated as hidden")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -85,6 +92,7 @@ enum TestMain {
             ("settings store", testSettingsStore)
             ,("region manager", testRegionManagerLifecycle)
             ,("region edit and delete", testRegionManagerUpdatesEffectAndDeletesSelectedRegion)
+            ,("window occlusion", testWindowOcclusionRequiresCompleteCoverage)
         ]
         for (name, test) in tests {
             try test()
