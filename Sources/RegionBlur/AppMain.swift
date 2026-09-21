@@ -76,6 +76,7 @@ import ApplicationServices
     private struct WindowBinding {
         var pid: pid_t
         var offset: CGSize
+        var element: AXUIElement?
     }
     private struct WindowState {
         var frame: CGRect
@@ -95,6 +96,7 @@ import ApplicationServices
     private var bindings: [UUID: WindowBinding] = [:]
     private var pendingWindowApp: NSRunningApplication?
     private var pickingWindow = false
+    private var automaticWindowPicking = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -130,6 +132,8 @@ import ApplicationServices
         menu.addItem(withTitle: "调节清晰度…", action: #selector(openClaritySlider), keyEquivalent: "")
         menu.addItem(withTitle: "跟随当前窗口", action: #selector(attachToFrontWindow), keyEquivalent: "")
         menu.addItem(withTitle: "点选窗口创建区域", action: #selector(createAttachedRegion), keyEquivalent: "")
+        menu.addItem(withTitle: "授权辅助功能", action: #selector(requestAccessibility), keyEquivalent: "")
+        menu.addItem(withTitle: "点选窗口并自动遮罩", action: #selector(beginAutomaticWindowPick), keyEquivalent: "")
         menu.addItem(withTitle: "停止跟随", action: #selector(stopTracking), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
         menu.addItem(.separator())
@@ -156,6 +160,14 @@ import ApplicationServices
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.onFinish = { [weak self, weak window] localRect in
                 guard let self, let window else { return }
+                if self.automaticWindowPicking {
+                    guard let localRect else { self.automaticWindowPicking = false; self.finishSelection(); return }
+                    let point = window.convertToScreen(NSRect(origin: CGPoint(x: localRect.midX, y: localRect.midY), size: .zero)).origin
+                    self.automaticWindowPicking = false
+                    self.finishSelection()
+                    self.createAutomaticOverlay(at: point)
+                    return
+                }
                 if let localRect, localRect.width >= 24, localRect.height >= 24 {
                     let origin = window.convertToScreen(NSRect(origin: localRect.origin, size: .zero)).origin
                     let region = self.manager.create(frame: CGRect(origin: origin, size: localRect.size))
@@ -201,6 +213,35 @@ import ApplicationServices
         pickingWindow = true
         beginSelection()
     }
+    @objc private func requestAccessibility() {
+        guard !AXIsProcessTrusted() else { return }
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+    @objc private func beginAutomaticWindowPick() {
+        guard AXIsProcessTrusted() else { requestAccessibility(); return }
+        automaticWindowPicking = true
+        beginSelection()
+    }
+    private func createAutomaticOverlay(at screenPoint: CGPoint) {
+        guard let windowElement = accessibilityWindow(at: screenPoint), let frame = windowFrame(windowElement) else { return }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(windowElement, &pid) == .success, pid != ProcessInfo.processInfo.processIdentifier else { return }
+        let region = manager.create(frame: frame)
+        selectedRegionID = region.id
+        attach(regionID: region.id, toPID: pid, element: windowElement)
+    }
+    private func accessibilityWindow(at screenPoint: CGPoint) -> AXUIElement? {
+        let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        let axPoint = CGPoint(x: screenPoint.x, y: screenHeight - screenPoint.y)
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(axPoint.x), Float(axPoint.y), &element) == .success,
+              let element else { return nil }
+        var windowValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &windowValue) == .success,
+           let windowValue { return (windowValue as! AXUIElement) }
+        return element
+    }
     private func applicationAtScreenPoint(_ point: CGPoint) -> NSRunningApplication? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
         let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
@@ -218,11 +259,16 @@ import ApplicationServices
     }
     private func attach(regionID id: UUID, to app: NSRunningApplication) {
         guard let bounds = firstWindowFrame(pid: app.processIdentifier) else { return }
+        attach(regionID: id, toPID: app.processIdentifier, element: nil, bounds: bounds, bundleIdentifier: app.bundleIdentifier ?? "")
+    }
+    private func attach(regionID id: UUID, toPID pid: pid_t, element: AXUIElement?, bounds suppliedBounds: CGRect? = nil, bundleIdentifier: String? = nil) {
+        guard let bounds = suppliedBounds ?? element.flatMap(windowFrame) ?? firstWindowFrame(pid: pid) else { return }
         guard let region = manager.regions.first(where: { $0.id == id }) else { return }
-        bindings[id] = WindowBinding(pid: app.processIdentifier, offset: CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY))
+        bindings[id] = WindowBinding(pid: pid, offset: CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY), element: element)
         var attachedRegion = region
         attachedRegion.mode = .attached
-        attachedRegion.attachment = WindowAttachment(bundleIdentifier: app.bundleIdentifier ?? "", windowTitle: nil, relativeFrame: RectValue(region.frame), processID: app.processIdentifier)
+        let bundle = bundleIdentifier ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+        attachedRegion.attachment = WindowAttachment(bundleIdentifier: bundle, windowTitle: nil, relativeFrame: RectValue(region.frame), processID: pid)
         manager.update(attachedRegion)
         if trackingTimer == nil {
             trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in self?.updateTrackedWindows() }
@@ -239,7 +285,8 @@ import ApplicationServices
         for (id, binding) in bindings {
             guard var region = manager.regions.first(where: { $0.id == id }) else { continue }
             let appHidden = NSRunningApplication(processIdentifier: binding.pid)?.isHidden ?? false
-            guard !appHidden, let state = windowState(pid: binding.pid), !state.fullyCovered else {
+            let exactFrame = binding.element.flatMap(windowFrame)
+            guard !appHidden, let state = exactFrame.map({ WindowState(frame: $0, fullyCovered: false) }) ?? windowState(pid: binding.pid), !state.fullyCovered else {
                 panels[id]?.orderOut(nil)
                 continue
             }
