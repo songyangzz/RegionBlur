@@ -87,6 +87,13 @@ func testWindowTrackingMenuIsUnified() throws {
     try expect(MenuConfiguration.windowTrackingTitles == ["点选窗口并自动遮罩"], "window tracking menu still exposes legacy actions")
 }
 
+func testAutomaticTrackingResizesOverlayWithWindow() throws {
+    let windowFrame = CGRect(x: 120, y: 80, width: 900, height: 700)
+    let oldOverlay = CGRect(x: 120, y: 80, width: 700, height: 500)
+    try expect(WindowTrackingGeometry.trackedFrame(windowFrame: windowFrame, overlayFrame: oldOverlay, resizesToWindow: true) == windowFrame, "automatic overlay did not follow window size")
+    try expect(WindowTrackingGeometry.trackedFrame(windowFrame: windowFrame, overlayFrame: oldOverlay, resizesToWindow: false) == CGRect(x: 120, y: 80, width: 700, height: 500), "fixed-size overlay was resized unexpectedly")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -98,6 +105,7 @@ enum TestMain {
             ,("region edit and delete", testRegionManagerUpdatesEffectAndDeletesSelectedRegion)
             ,("window occlusion", testWindowOcclusionRequiresCompleteCoverage)
             ,("unified window tracking menu", testWindowTrackingMenuIsUnified)
+            ,("automatic tracking resizes overlay", testAutomaticTrackingResizesOverlayWithWindow)
         ]
         for (name, test) in tests {
             try test()

@@ -102,10 +102,15 @@ import ApplicationServices
         var pid: pid_t
         var offset: CGSize
         var element: AXUIElement?
+        var resizesToWindow: Bool
     }
     private struct WindowState {
         var frame: CGRect
         var fullyCovered: Bool
+    }
+    private struct ScreenWindowInfo {
+        var pid: pid_t
+        var frame: CGRect
     }
     private let store = SettingsStore.applicationStore()
     private var manager: RegionManager!
@@ -238,15 +243,22 @@ import ApplicationServices
     }
     private func createAutomaticOverlay(at screenPoint: CGPoint) {
         guard AXIsProcessTrusted() else { showAlert(title: "没有辅助功能权限", message: "请在系统设置中允许 RegionBlur 后重新尝试。"); buildMenu(); return }
-        guard let windowElement = accessibilityWindow(at: screenPoint), let frame = windowFrame(windowElement) else {
-            showAlert(title: "没有识别到窗口", message: "请点击普通应用窗口的内容区域，不要点击桌面、菜单栏或 RegionBlur 自己的面板。")
+        if let windowElement = accessibilityWindow(at: screenPoint), let frame = windowFrame(windowElement) {
+            var pid: pid_t = 0
+            if AXUIElementGetPid(windowElement, &pid) == .success, pid != ProcessInfo.processInfo.processIdentifier {
+                let region = manager.create(frame: frame)
+                selectedRegionID = region.id
+                attach(regionID: region.id, toPID: pid, element: windowElement, resizesToWindow: true)
+                return
+            }
+        }
+        if let info = screenWindowInfo(at: screenPoint) {
+            let region = manager.create(frame: info.frame)
+            selectedRegionID = region.id
+            attach(regionID: region.id, toPID: info.pid, element: nil, bounds: info.frame, resizesToWindow: true)
             return
         }
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(windowElement, &pid) == .success, pid != ProcessInfo.processInfo.processIdentifier else { return }
-        let region = manager.create(frame: frame)
-        selectedRegionID = region.id
-        attach(regionID: region.id, toPID: pid, element: windowElement)
+        showAlert(title: "没有识别到窗口", message: "请点击普通应用窗口的内容区域，不要点击桌面、菜单栏或 RegionBlur 自己的面板。")
     }
     private func showAlert(title: String, message: String) {
         let alert = NSAlert(); alert.messageText = title; alert.informativeText = message; alert.alertStyle = .informational
@@ -264,6 +276,9 @@ import ApplicationServices
         return element
     }
     private func windowFrameAtScreenPoint(_ point: CGPoint) -> CGRect? {
+        screenWindowInfo(at: point)?.frame
+    }
+    private func screenWindowInfo(at point: CGPoint) -> ScreenWindowInfo? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
         let screenHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
         let cgPoint = CGPoint(x: point.x, y: screenHeight - point.y)
@@ -274,18 +289,18 @@ import ApplicationServices
                   let rawBounds = info[kCGWindowBounds as String] else { continue }
             let bounds = rawBounds as! CFDictionary
             guard let cgRect = CGRect(dictionaryRepresentation: bounds), cgRect.contains(cgPoint) else { continue }
-            return CGRect(x: cgRect.minX, y: screenHeight - cgRect.maxY, width: cgRect.width, height: cgRect.height)
+            return ScreenWindowInfo(pid: pid, frame: CGRect(x: cgRect.minX, y: screenHeight - cgRect.maxY, width: cgRect.width, height: cgRect.height))
         }
         return nil
     }
-    private func attach(regionID id: UUID, to app: NSRunningApplication) {
+    private func attach(regionID id: UUID, to app: NSRunningApplication, resizesToWindow: Bool = false) {
         guard let bounds = firstWindowFrame(pid: app.processIdentifier) else { return }
-        attach(regionID: id, toPID: app.processIdentifier, element: nil, bounds: bounds, bundleIdentifier: app.bundleIdentifier ?? "")
+        attach(regionID: id, toPID: app.processIdentifier, element: nil, bounds: bounds, bundleIdentifier: app.bundleIdentifier ?? "", resizesToWindow: resizesToWindow)
     }
-    private func attach(regionID id: UUID, toPID pid: pid_t, element: AXUIElement?, bounds suppliedBounds: CGRect? = nil, bundleIdentifier: String? = nil) {
+    private func attach(regionID id: UUID, toPID pid: pid_t, element: AXUIElement?, bounds suppliedBounds: CGRect? = nil, bundleIdentifier: String? = nil, resizesToWindow: Bool = false) {
         guard let bounds = suppliedBounds ?? element.flatMap(windowFrame) ?? firstWindowFrame(pid: pid) else { return }
         guard let region = manager.regions.first(where: { $0.id == id }) else { return }
-        bindings[id] = WindowBinding(pid: pid, offset: CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY), element: element)
+        bindings[id] = WindowBinding(pid: pid, offset: CGSize(width: region.frame.minX - bounds.minX, height: region.frame.minY - bounds.minY), element: element, resizesToWindow: resizesToWindow)
         var attachedRegion = region
         attachedRegion.mode = .attached
         let bundle = bundleIdentifier ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
@@ -312,8 +327,9 @@ import ApplicationServices
             let bounds = state.frame
             region.mode = .attached
             let newOrigin = CGPoint(x: bounds.minX + binding.offset.width, y: bounds.minY + binding.offset.height)
-            if abs(region.frame.minX - newOrigin.x) > 0.5 || abs(region.frame.minY - newOrigin.y) > 0.5 {
-                region.frame.origin = newOrigin
+            let newFrame = WindowTrackingGeometry.trackedFrame(windowFrame: bounds, overlayFrame: CGRect(origin: newOrigin, size: region.frame.size), resizesToWindow: binding.resizesToWindow)
+            if region.frame != newFrame {
+                region.frame = newFrame
                 manager.update(region)
             } else {
                 panels[id]?.apply(region, globallyVisible: allVisible)
@@ -324,7 +340,7 @@ import ApplicationServices
         for region in manager.regions where region.mode == .attached {
             guard let attachment = region.attachment else { continue }
             let app = NSRunningApplication.runningApplications(withBundleIdentifier: attachment.bundleIdentifier).first
-            if let app { attach(regionID: region.id, to: app) }
+            if let app { attach(regionID: region.id, to: app, resizesToWindow: true) }
         }
     }
     private func windowFrame(_ window: AXUIElement) -> CGRect? {
