@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import RegionBlurCore
 import ApplicationServices
+import ServiceManagement
 
 @MainActor final class OverlayPanel: NSPanel {
     let regionID: UUID
@@ -165,6 +166,13 @@ import ApplicationServices
         menu.addItem(permissionItem)
         menu.addItem(withTitle: MenuConfiguration.windowTrackingTitles[0], action: #selector(beginAutomaticWindowPick), keyEquivalent: "")
         menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
+        let launchItem = NSMenuItem(title: "开机自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        launchItem.state = switch launchAtLoginStatus() {
+        case .enabled: .on
+        case .requiresApproval: .mixed
+        case .disabled: .off
+        }
+        menu.addItem(launchItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
         for item in menu.items { item.target = self }
@@ -215,6 +223,28 @@ import ApplicationServices
     private func finishSelection() { selectionWindows.forEach { $0.orderOut(nil) }; selectionWindows.removeAll() }
 
     @objc private func toggleAll() { allVisible.toggle(); manager.reloadPresentation(); refresh(manager.regions) }
+    private func launchAtLoginStatus() -> LaunchAtLoginStatus {
+        switch SMAppService.mainApp.status {
+        case .enabled: .enabled
+        case .requiresApproval: .requiresApproval
+        case .notRegistered, .notFound: .disabled
+        @unknown default: .disabled
+        }
+    }
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            switch LaunchAtLoginPolicy.action(for: launchAtLoginStatus()) {
+            case .register: try service.register()
+            case .unregister: try service.unregister()
+            case .openSettings:
+                SMAppService.openSystemSettingsLoginItems()
+            }
+        } catch {
+            showAlert(title: "无法修改开机启动", message: error.localizedDescription)
+        }
+        buildMenu()
+    }
     @objc private func deleteSelected() {
         guard let id = selectedRegionID ?? manager.regions.last?.id else { return }
         runtimeHiddenRegionIDs.remove(id)

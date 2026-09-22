@@ -94,6 +94,12 @@ func testAutomaticTrackingResizesOverlayWithWindow() throws {
     try expect(WindowTrackingGeometry.trackedFrame(windowFrame: windowFrame, overlayFrame: oldOverlay, resizesToWindow: false) == CGRect(x: 120, y: 80, width: 700, height: 500), "fixed-size overlay was resized unexpectedly")
 }
 
+func testLaunchAtLoginToggleChoosesCorrectAction() throws {
+    try expect(LaunchAtLoginPolicy.action(for: .disabled) == .register, "disabled login item did not request registration")
+    try expect(LaunchAtLoginPolicy.action(for: .enabled) == .unregister, "enabled login item did not request removal")
+    try expect(LaunchAtLoginPolicy.action(for: .requiresApproval) == .openSettings, "pending login item did not open system settings")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -106,6 +112,7 @@ enum TestMain {
             ,("window occlusion", testWindowOcclusionRequiresCompleteCoverage)
             ,("unified window tracking menu", testWindowTrackingMenuIsUnified)
             ,("automatic tracking resizes overlay", testAutomaticTrackingResizesOverlayWithWindow)
+            ,("launch at login toggle", testLaunchAtLoginToggleChoosesCorrectAction)
         ]
         for (name, test) in tests {
             try test()
