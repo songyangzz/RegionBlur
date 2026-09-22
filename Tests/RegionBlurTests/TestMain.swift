@@ -117,6 +117,14 @@ func testShortcutConfigurationCanChangeAndRejectDuplicates() throws {
     try expect(!configuration.set(custom, for: .hideAll), "duplicate shortcut was accepted")
 }
 
+func testShortcutHotKeyIdentifiersRoundTrip() throws {
+    let identifiers = AppShortcut.allCases.map(\.hotKeyIdentifier)
+    try expect(Set(identifiers).count == identifiers.count, "global hot key identifiers were not unique")
+    for command in AppShortcut.allCases {
+        try expect(AppShortcut(hotKeyIdentifier: command.hotKeyIdentifier) == command, "hot key identifier did not map back to its command")
+    }
+}
+
 func testClarityAdjustmentDirectionAndBounds() throws {
     try expect(ClarityAdjustment.adjust(0.82, direction: .increase) == 0.74, "increasing clarity did not reduce blur opacity")
     try expect(ClarityAdjustment.adjust(0.82, direction: .decrease) == 0.90, "decreasing clarity did not increase blur opacity")
@@ -139,6 +147,7 @@ enum TestMain {
             ,("launch at login toggle", testLaunchAtLoginToggleChoosesCorrectAction)
             ,("global shortcut routing", testGlobalShortcutRouting)
             ,("custom shortcut configuration", testShortcutConfigurationCanChangeAndRejectDuplicates)
+            ,("shortcut hot key identifiers", testShortcutHotKeyIdentifiersRoundTrip)
             ,("clarity shortcut adjustment", testClarityAdjustmentDirectionAndBounds)
         ]
         for (name, test) in tests {

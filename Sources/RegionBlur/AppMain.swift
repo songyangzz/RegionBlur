@@ -132,6 +132,7 @@ import ServiceManagement
     private var shortcutSettingsWindow: NSWindow?
     private var shortcutButtons: [AppShortcut: NSButton] = [:]
     private var recordingShortcut: AppShortcut?
+    private var globalShortcutRegistrar: GlobalHotKeyRegistrar?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -139,14 +140,15 @@ import ServiceManagement
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "◫"
         loadShortcutConfiguration()
+        globalShortcutRegistrar = GlobalHotKeyRegistrar { [weak self] command in
+            self?.performShortcut(command)
+        }
+        _ = globalShortcutRegistrar?.register(shortcutConfiguration)
         buildMenu()
         manager.reloadPresentation()
         restoreSavedBindings()
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            _ = self?.handleShortcut(event)
-        }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handleShortcut(event) == true ? nil : event
+            self?.recordShortcut(from: event) == true ? nil : event
         }
     }
 
@@ -231,41 +233,47 @@ import ServiceManagement
 
     private func finishSelection() { selectionWindows.forEach { $0.orderOut(nil) }; selectionWindows.removeAll() }
 
-    private func handleShortcut(_ event: NSEvent) -> Bool {
-        if let recordingShortcut {
-            guard shortcutSettingsWindow?.isVisible == true else {
-                self.recordingShortcut = nil
-                return false
-            }
-            if event.keyCode == 53 {
-                self.recordingShortcut = nil
-                refreshShortcutButtons()
-                return true
-            }
-            let modifiers = shortcutModifiers(from: event.modifierFlags)
-            guard !modifiers.isEmpty, modifiers != [.shift] else {
-                NSSound.beep()
-                return true
-            }
-            let binding = ShortcutBinding(keyCode: event.keyCode, modifiers: modifiers, keyLabel: shortcutKeyLabel(for: event))
-            guard shortcutConfiguration.set(binding, for: recordingShortcut) else {
-                NSSound.beep()
-                showAlert(title: "快捷键已被占用", message: "请选择另一组快捷键。")
-                refreshShortcutButtons()
-                self.recordingShortcut = nil
-                return true
-            }
+    private func recordShortcut(from event: NSEvent) -> Bool {
+        guard let recordingShortcut else { return false }
+        guard shortcutSettingsWindow?.isVisible == true else {
             self.recordingShortcut = nil
-            saveShortcutConfiguration()
+            return false
+        }
+        if event.keyCode == 53 {
+            self.recordingShortcut = nil
             refreshShortcutButtons()
-            buildMenu()
             return true
         }
-        guard let command = ShortcutRouting.command(
-            keyCode: event.keyCode,
-            modifiers: shortcutModifiers(from: event.modifierFlags),
-            configuration: shortcutConfiguration
-        ) else { return false }
+        let modifiers = shortcutModifiers(from: event.modifierFlags)
+        guard !modifiers.isEmpty, modifiers != [.shift] else {
+            NSSound.beep()
+            return true
+        }
+        let oldConfiguration = shortcutConfiguration
+        let binding = ShortcutBinding(keyCode: event.keyCode, modifiers: modifiers, keyLabel: shortcutKeyLabel(for: event))
+        guard shortcutConfiguration.set(binding, for: recordingShortcut) else {
+            NSSound.beep()
+            showAlert(title: "快捷键已被占用", message: "请选择另一组快捷键。")
+            refreshShortcutButtons()
+            self.recordingShortcut = nil
+            return true
+        }
+        if globalShortcutRegistrar?.register(shortcutConfiguration).contains(recordingShortcut) == true {
+            shortcutConfiguration = oldConfiguration
+            _ = globalShortcutRegistrar?.register(shortcutConfiguration)
+            NSSound.beep()
+            showAlert(title: "快捷键无法注册", message: "这个组合键可能已被系统或其他应用占用，请选择另一组。")
+            refreshShortcutButtons()
+            self.recordingShortcut = nil
+            return true
+        }
+        self.recordingShortcut = nil
+        saveShortcutConfiguration()
+        refreshShortcutButtons()
+        buildMenu()
+        return true
+    }
+    private func performShortcut(_ command: AppShortcut) {
         switch command {
         case .createRegion: beginSelection()
         case .showAll: setAllVisible(true)
@@ -273,7 +281,6 @@ import ServiceManagement
         case .increaseClarity: adjustClarity(.increase)
         case .decreaseClarity: adjustClarity(.decrease)
         }
-        return true
     }
     private func setAllVisible(_ visible: Bool) {
         allVisible = visible
@@ -375,6 +382,7 @@ import ServiceManagement
     @objc private func restoreDefaultShortcuts() {
         shortcutConfiguration = .default
         recordingShortcut = nil
+        _ = globalShortcutRegistrar?.register(shortcutConfiguration)
         saveShortcutConfiguration()
         refreshShortcutButtons()
         buildMenu()

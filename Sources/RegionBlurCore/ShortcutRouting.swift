@@ -4,6 +4,21 @@ public enum AppShortcut: String, Codable, CaseIterable, Hashable, Sendable {
     case hideAll
     case increaseClarity
     case decreaseClarity
+
+    public var hotKeyIdentifier: UInt32 {
+        switch self {
+        case .createRegion: 1
+        case .showAll: 2
+        case .hideAll: 3
+        case .increaseClarity: 4
+        case .decreaseClarity: 5
+        }
+    }
+
+    public init?(hotKeyIdentifier: UInt32) {
+        guard let command = Self.allCases.first(where: { $0.hotKeyIdentifier == hotKeyIdentifier }) else { return nil }
+        self = command
+    }
 }
 
 public struct ShortcutModifiers: OptionSet, Codable, Hashable, Sendable {
