@@ -127,21 +127,26 @@ import ServiceManagement
     private var trackingTimer: Timer?
     private var bindings: [UUID: WindowBinding] = [:]
     private var automaticWindowPicking = false
+    private let shortcutDefaultsKey = "shortcutConfiguration"
+    private var shortcutConfiguration = ShortcutConfiguration.default
+    private var shortcutSettingsWindow: NSWindow?
+    private var shortcutButtons: [AppShortcut: NSButton] = [:]
+    private var recordingShortcut: AppShortcut?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         manager = try? RegionManager(store: store) { [weak self] regions in self?.refresh(regions) }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "◫"
+        loadShortcutConfiguration()
         buildMenu()
         manager.reloadPresentation()
         restoreSavedBindings()
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains([.command, .option]) && event.keyCode == 11 { self?.beginSelection() }
+            _ = self?.handleShortcut(event)
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains([.command, .option]) && event.keyCode == 11 { self?.beginSelection(); return nil }
-            return event
+            self?.handleShortcut(event) == true ? nil : event
         }
     }
 
@@ -165,7 +170,11 @@ import ServiceManagement
         permissionItem.isEnabled = false
         menu.addItem(permissionItem)
         menu.addItem(withTitle: MenuConfiguration.windowTrackingTitles[0], action: #selector(beginAutomaticWindowPick), keyEquivalent: "")
-        menu.addItem(withTitle: "显示/隐藏全部", action: #selector(toggleAll), keyEquivalent: "")
+        menu.addItem(withTitle: shortcutMenuTitle("显示全部", command: .showAll), action: #selector(showAll), keyEquivalent: "")
+        menu.addItem(withTitle: shortcutMenuTitle("隐藏全部", command: .hideAll), action: #selector(hideAll), keyEquivalent: "")
+        menu.addItem(withTitle: shortcutMenuTitle("提高清晰度", command: .increaseClarity), action: #selector(increaseClarity), keyEquivalent: "")
+        menu.addItem(withTitle: shortcutMenuTitle("降低清晰度", command: .decreaseClarity), action: #selector(decreaseClarity), keyEquivalent: "")
+        menu.addItem(withTitle: "设置快捷键…", action: #selector(openShortcutSettings), keyEquivalent: "")
         let launchItem = NSMenuItem(title: "开机自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchItem.state = switch launchAtLoginStatus() {
         case .enabled: .on
@@ -222,7 +231,159 @@ import ServiceManagement
 
     private func finishSelection() { selectionWindows.forEach { $0.orderOut(nil) }; selectionWindows.removeAll() }
 
-    @objc private func toggleAll() { allVisible.toggle(); manager.reloadPresentation(); refresh(manager.regions) }
+    private func handleShortcut(_ event: NSEvent) -> Bool {
+        if let recordingShortcut {
+            guard shortcutSettingsWindow?.isVisible == true else {
+                self.recordingShortcut = nil
+                return false
+            }
+            if event.keyCode == 53 {
+                self.recordingShortcut = nil
+                refreshShortcutButtons()
+                return true
+            }
+            let modifiers = shortcutModifiers(from: event.modifierFlags)
+            guard !modifiers.isEmpty, modifiers != [.shift] else {
+                NSSound.beep()
+                return true
+            }
+            let binding = ShortcutBinding(keyCode: event.keyCode, modifiers: modifiers, keyLabel: shortcutKeyLabel(for: event))
+            guard shortcutConfiguration.set(binding, for: recordingShortcut) else {
+                NSSound.beep()
+                showAlert(title: "快捷键已被占用", message: "请选择另一组快捷键。")
+                refreshShortcutButtons()
+                self.recordingShortcut = nil
+                return true
+            }
+            self.recordingShortcut = nil
+            saveShortcutConfiguration()
+            refreshShortcutButtons()
+            buildMenu()
+            return true
+        }
+        guard let command = ShortcutRouting.command(
+            keyCode: event.keyCode,
+            modifiers: shortcutModifiers(from: event.modifierFlags),
+            configuration: shortcutConfiguration
+        ) else { return false }
+        switch command {
+        case .createRegion: beginSelection()
+        case .showAll: setAllVisible(true)
+        case .hideAll: setAllVisible(false)
+        case .increaseClarity: adjustClarity(.increase)
+        case .decreaseClarity: adjustClarity(.decrease)
+        }
+        return true
+    }
+    private func setAllVisible(_ visible: Bool) {
+        allVisible = visible
+        manager.reloadPresentation()
+        refresh(manager.regions)
+    }
+    @objc private func showAll() { setAllVisible(true) }
+    @objc private func hideAll() { setAllVisible(false) }
+    @objc private func increaseClarity() { adjustClarity(.increase) }
+    @objc private func decreaseClarity() { adjustClarity(.decrease) }
+    private func shortcutMenuTitle(_ title: String, command: AppShortcut) -> String {
+        guard let binding = shortcutConfiguration.binding(for: command) else { return title }
+        return "\(title)  \(binding.displayString)"
+    }
+    private func shortcutModifiers(from flags: NSEvent.ModifierFlags) -> ShortcutModifiers {
+        var result: ShortcutModifiers = []
+        if flags.contains(.command) { result.insert(.command) }
+        if flags.contains(.option) { result.insert(.option) }
+        if flags.contains(.control) { result.insert(.control) }
+        if flags.contains(.shift) { result.insert(.shift) }
+        return result
+    }
+    private func shortcutKeyLabel(for event: NSEvent) -> String {
+        switch event.keyCode {
+        case 36: return "↩"
+        case 48: return "⇥"
+        case 49: return "空格"
+        case 51: return "⌫"
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
+        default:
+            let label = event.charactersIgnoringModifiers?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+            return label.isEmpty ? "键\(event.keyCode)" : label
+        }
+    }
+    private func loadShortcutConfiguration() {
+        guard let data = UserDefaults.standard.data(forKey: shortcutDefaultsKey),
+              let configuration = try? JSONDecoder().decode(ShortcutConfiguration.self, from: data) else { return }
+        shortcutConfiguration = configuration
+    }
+    private func saveShortcutConfiguration() {
+        guard let data = try? JSONEncoder().encode(shortcutConfiguration) else { return }
+        UserDefaults.standard.set(data, forKey: shortcutDefaultsKey)
+    }
+    @objc private func openShortcutSettings() {
+        if let window = shortcutSettingsWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 270), styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
+        window.title = "快捷键设置"
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 270))
+        let hint = NSTextField(labelWithString: "点击快捷键后，直接按下新的组合键。按 Esc 取消。")
+        hint.frame = NSRect(x: 24, y: 226, width: 372, height: 20)
+        hint.textColor = .secondaryLabelColor
+        content.addSubview(hint)
+        let rows: [(AppShortcut, String)] = [
+            (.showAll, "显示全部"),
+            (.hideAll, "隐藏全部"),
+            (.increaseClarity, "提高清晰度"),
+            (.decreaseClarity, "降低清晰度")
+        ]
+        shortcutButtons.removeAll()
+        for (index, row) in rows.enumerated() {
+            let y = CGFloat(184 - index * 42)
+            let label = NSTextField(labelWithString: row.1)
+            label.frame = NSRect(x: 32, y: y + 4, width: 140, height: 20)
+            let button = NSButton(title: shortcutConfiguration.binding(for: row.0)?.displayString ?? "", target: self, action: #selector(beginShortcutRecording(_:)))
+            button.frame = NSRect(x: 190, y: y, width: 190, height: 28)
+            button.bezelStyle = .rounded
+            button.identifier = NSUserInterfaceItemIdentifier(row.0.rawValue)
+            shortcutButtons[row.0] = button
+            content.addSubview(label)
+            content.addSubview(button)
+        }
+        let restore = NSButton(title: "恢复默认", target: self, action: #selector(restoreDefaultShortcuts))
+        restore.frame = NSRect(x: 300, y: 14, width: 96, height: 30)
+        restore.bezelStyle = .rounded
+        content.addSubview(restore)
+        window.contentView = content
+        window.center()
+        shortcutSettingsWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+    @objc private func beginShortcutRecording(_ sender: NSButton) {
+        guard let rawValue = sender.identifier?.rawValue,
+              let command = AppShortcut(rawValue: rawValue) else { return }
+        recordingShortcut = command
+        refreshShortcutButtons()
+        sender.title = "请按新快捷键…"
+        shortcutSettingsWindow?.makeFirstResponder(sender)
+    }
+    @objc private func restoreDefaultShortcuts() {
+        shortcutConfiguration = .default
+        recordingShortcut = nil
+        saveShortcutConfiguration()
+        refreshShortcutButtons()
+        buildMenu()
+    }
+    private func refreshShortcutButtons() {
+        for (command, button) in shortcutButtons {
+            button.title = shortcutConfiguration.binding(for: command)?.displayString ?? ""
+        }
+    }
     private func launchAtLoginStatus() -> LaunchAtLoginStatus {
         switch SMAppService.mainApp.status {
         case .enabled: .enabled
@@ -451,6 +612,14 @@ import ServiceManagement
     }
     @objc private func clarityChanged(_ slider: NSSlider) {
         globalOpacity = slider.doubleValue
+        applyGlobalOpacity()
+    }
+    private func adjustClarity(_ direction: ClarityDirection) {
+        globalOpacity = ClarityAdjustment.adjust(globalOpacity, direction: direction)
+        claritySlider?.doubleValue = globalOpacity
+        applyGlobalOpacity()
+    }
+    private func applyGlobalOpacity() {
         for var region in manager.regions {
             region.effect.opacity = globalOpacity
             manager.update(region)

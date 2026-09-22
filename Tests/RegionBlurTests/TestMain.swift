@@ -100,6 +100,30 @@ func testLaunchAtLoginToggleChoosesCorrectAction() throws {
     try expect(LaunchAtLoginPolicy.action(for: .requiresApproval) == .openSettings, "pending login item did not open system settings")
 }
 
+func testGlobalShortcutRouting() throws {
+    let configuration = ShortcutConfiguration.default
+    try expect(ShortcutRouting.command(keyCode: 18, modifiers: [.command, .option], configuration: configuration) == .showAll, "⌥⌘1 did not map to show")
+    try expect(ShortcutRouting.command(keyCode: 19, modifiers: [.command, .option], configuration: configuration) == .hideAll, "⌥⌘2 did not map to hide")
+    try expect(ShortcutRouting.command(keyCode: 126, modifiers: [.command, .option], configuration: configuration) == .increaseClarity, "⌥⌘↑ did not increase clarity")
+    try expect(ShortcutRouting.command(keyCode: 125, modifiers: [.command, .option], configuration: configuration) == .decreaseClarity, "⌥⌘↓ did not decrease clarity")
+    try expect(ShortcutRouting.command(keyCode: 18, modifiers: [.command], configuration: configuration) == nil, "shortcut worked without Option")
+}
+
+func testShortcutConfigurationCanChangeAndRejectDuplicates() throws {
+    var configuration = ShortcutConfiguration.default
+    let custom = ShortcutBinding(keyCode: 0, modifiers: [.command, .shift])
+    try expect(configuration.set(custom, for: .showAll), "valid custom shortcut was rejected")
+    try expect(ShortcutRouting.command(keyCode: 0, modifiers: [.command, .shift], configuration: configuration) == .showAll, "custom shortcut was not routed")
+    try expect(!configuration.set(custom, for: .hideAll), "duplicate shortcut was accepted")
+}
+
+func testClarityAdjustmentDirectionAndBounds() throws {
+    try expect(ClarityAdjustment.adjust(0.82, direction: .increase) == 0.74, "increasing clarity did not reduce blur opacity")
+    try expect(ClarityAdjustment.adjust(0.82, direction: .decrease) == 0.90, "decreasing clarity did not increase blur opacity")
+    try expect(ClarityAdjustment.adjust(0.16, direction: .increase) == 0.15, "clarity exceeded its clear limit")
+    try expect(ClarityAdjustment.adjust(0.98, direction: .decrease) == 1.0, "clarity exceeded its blur limit")
+}
+
 @main
 enum TestMain {
     static func main() throws {
@@ -113,6 +137,9 @@ enum TestMain {
             ,("unified window tracking menu", testWindowTrackingMenuIsUnified)
             ,("automatic tracking resizes overlay", testAutomaticTrackingResizesOverlayWithWindow)
             ,("launch at login toggle", testLaunchAtLoginToggleChoosesCorrectAction)
+            ,("global shortcut routing", testGlobalShortcutRouting)
+            ,("custom shortcut configuration", testShortcutConfigurationCanChangeAndRejectDuplicates)
+            ,("clarity shortcut adjustment", testClarityAdjustmentDirectionAndBounds)
         ]
         for (name, test) in tests {
             try test()
